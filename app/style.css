@@ -14,9 +14,26 @@
 html { scroll-behavior:smooth; scroll-padding-top:72px; }
 .stApp h1,.stApp h2,.stApp h3,.stApp p,.stApp button,.stApp input,.stApp textarea,
 .stApp [data-testid="stMarkdownContainer"] { font-family:Inter,sans-serif; }
-#MainMenu,footer,[data-testid="stToolbar"],[data-testid="stAppDeployButton"],.stDeployButton {display:none!important;}
+#MainMenu,footer,[data-testid="stAppDeployButton"],.stDeployButton {display:none!important;}
 [data-testid="stHeader"] {background:transparent;height:48px;pointer-events:none;}
 [data-testid="stHeader"] button,[data-testid="stSidebarCollapsedControl"] {pointer-events:auto;}
+[data-testid="stExpandSidebarButton"], [data-testid="stSidebarCollapseButton"] {
+  display:flex!important;visibility:visible!important;opacity:1!important;align-items:center;justify-content:center;
+  width:36px!important;height:36px!important;min-width:36px;min-height:36px;
+  color:var(--ink)!important;background:var(--card)!important;
+  border:1px solid var(--line)!important;border-radius:10px;
+}
+[data-testid="stExpandSidebarButton"], [data-testid="stSidebarCollapseButton"] {position:fixed;top:8px;left:12px;z-index:1000000;}
+[data-testid="stToolbar"] {pointer-events:none;}
+[data-testid="stToolbar"] button {pointer-events:auto;}
+.stApp {overflow-wrap:anywhere;}
+[data-testid="stColumn"] {min-width:0;}
+[class*="st-key-source_"] .source-heading {flex-wrap:wrap;}
+[class*="st-key-error_"] {background:var(--amber);border-color:var(--amber-ink)!important;}
+@media(max-width:900px) {
+  [data-testid="stHorizontalBlock"]:has([class*="st-key-source_"]) {flex-direction:column;}
+  [data-testid="stHorizontalBlock"]:has([class*="st-key-source_"]) > [data-testid="stColumn"] {width:100%!important;flex:1 1 100%!important;}
+}
 .stMainBlockContainer {max-width:1080px;padding:48px 48px 32px;}
 [data-testid="stSidebar"] {background:var(--card);border-right:1px solid var(--line);color:var(--ink);}
 [data-testid="stSidebar"] h3 {font-size:14px;margin-top:24px;color:var(--ink);}
@@ -112,3 +129,47 @@ mark {background:var(--sand);color:var(--gold);padding:1px 2px;border-radius:3px
 .evaluation-intro h2 {font-size:32px;font-weight:600;letter-spacing:-1px;color:var(--ink);padding:8px 0;}
 .evaluation-intro p {font-size:14px;color:var(--muted);}
 .evaluation-highlight {background:var(--sand);color:var(--gold);border:1px solid var(--line);border-radius:16px;padding:24px;font-size:16px;line-height:1.8;font-weight:600;margin:8px 0 16px;}
+
+/* Explicit Appearance overrides must also cover Streamlit's native widgets. */
+.stApp label, .stApp [data-testid="stWidgetLabel"] p,
+.stApp [data-testid="stToggle"] p {color:var(--ink)!important;}
+.stApp [data-baseweb="select"] > div,
+.stApp [data-baseweb="select"] input {
+  background:var(--card)!important;color:var(--ink)!important;
+  -webkit-text-fill-color:var(--ink)!important;
+}
+.stApp [data-testid="stChatInput"] > div,
+.stApp [data-testid="stChatInput"] textarea {
+  background:var(--card)!important;color:var(--ink)!important;
+  -webkit-text-fill-color:var(--ink)!important;
+}
+.stApp [data-testid="stChatInput"] textarea::placeholder {
+  color:var(--muted)!important;-webkit-text-fill-color:var(--muted)!important;opacity:1;
+}
+.stApp [data-testid="stSegmentedControl"] button {
+  color:var(--ink)!important;background:var(--card)!important;border-color:var(--line)!important;
+}
+.stApp [data-testid="stSegmentedControl"] button[aria-checked="true"] {
+  background:var(--sand)!important;color:var(--gold)!important;border-color:var(--gold)!important;
+}
+.stApp [data-testid="stSelectbox"] div,
+.stApp [data-testid="stSelectbox"] input,
+.stApp [data-testid="stSelectbox"] button {
+  background:var(--card)!important;color:var(--ink)!important;
+  -webkit-text-fill-color:var(--ink)!important;
+}
+.stApp [data-testid="stExpander"] summary,
+.stApp [data-testid="stExpander"] summary p,
+.stApp [data-testid="stExpander"] summary svg {color:var(--ink)!important;}
+.stApp button p {color:inherit;}
+[data-testid="stSidebar"][data-collapsed="true"] {
+  display:none!important;pointer-events:none!important;
+}
+
+[data-testid="stExpandSidebarButton"] span, [data-testid="stSidebarCollapseButton"] span {color:var(--ink)!important;}
+.stApp [data-testid="stButtonGroup"] [role="radio"] {
+  color:var(--ink)!important;background:var(--card)!important;border-color:var(--line)!important;
+}
+.stApp [data-testid="stButtonGroup"] [role="radio"][data-selected] {
+  color:var(--gold)!important;background:var(--sand)!important;border-color:var(--gold)!important;
+}

@@ -14,10 +14,11 @@ from time import perf_counter
 
 import streamlit as st
 
+st.set_option("client.showErrorDetails", "none")
 st.set_page_config(page_title="Qanoon — UAE Labour Law Assistant", page_icon="⚖️", layout="wide")
 
 
-@st.cache_resource
+@st.cache_resource(show_spinner="Loading legal models… ~10 s")
 def cached_graph():
     return load_graph()
 
@@ -204,9 +205,21 @@ def render_evaluation():
     st.caption('Retrieval and citation metrics apply to questions with expected articles; blank evaluations are excluded from their means. Results describe this evaluation set, not a guarantee for every question.')
 
 
+def render_error():
+    with st.container(border=True, key="error_search"):
+        st.error("We couldn’t reach the legal assistant. Please try again in a moment.")
+        st.caption("Your question is saved. You can retry without typing it again.")
+        if st.button("Try again"):
+            if failed := st.session_state.pop("failed_question", None):
+                st.session_state.pending_question = failed
+            st.session_state.pop("model_load_failed", None)
+            st.rerun()
+
+
 page = st.segmented_control("Explore", ["Ask Qanoon", "How it was evaluated"], default="Ask Qanoon", key="page", label_visibility="collapsed")
 if page == "How it was evaluated":
     render_evaluation()
+    st.caption("Explains the law; not legal advice.")
     st.stop()
 
 selected = None
@@ -229,6 +242,16 @@ for index, message in enumerate(st.session_state.messages):
             selected = render_answer(message["view"], index) or selected
         else:
             st.write(message["content"])
+
+# Paint the welcome page before the first cached model load.
+if not st.session_state.messages:
+    try:
+        cached_graph()
+        st.session_state.pop("model_load_failed", None)
+    except Exception:
+        st.session_state.model_load_failed = True
+    if st.session_state.get("model_load_failed"):
+        render_error()
 
 question = st.chat_input("Ask about leave, gratuity, contracts, your data…", disabled="pending_question" in st.session_state) or selected
 if question:
@@ -267,11 +290,7 @@ if pending := st.session_state.pop("pending_question", None):
             status.update(label="We couldn’t finish this search", state="error", expanded=False)
             st.session_state.failed_question = pending
 
-if failed := st.session_state.get("failed_question"):
-    st.error("We couldn’t complete your last question. Please try again in a moment.")
-    if st.button("Try this question again"):
-        st.session_state.pending_question = failed
-        st.session_state.pop("failed_question", None)
-        st.rerun()
+if st.session_state.get("failed_question"):
+    render_error()
 
 st.caption("Explains the law; not legal advice. Always check the cited article for your situation.")

@@ -194,12 +194,12 @@ def conversation_markdown(messages: list) -> str:
             lines.extend(["## Question", "", message["content"], ""])
         else:
             view = message["view"]
-            lines.extend(["## Answer", "", view.get("display_answer", view["answer"]), ""])
-            cards = view.get("display_sources", view["sources"])
+            lines.extend(["## Answer", "", view.get("display_answer", view.get("answer", "")), ""])
+            cards = view.get("display_sources", view.get("sources", []))
             if cards and not view["path"].startswith("refused"):
                 lines.extend(["### Citations" if any(s["cited"] for s in cards) else "### Retrieved sources (not cited)", ""])
                 for source in cards:
-                    lines.append(f"- [S{source['n']}] {source['label']} — {source['law_title']} ({source.get('part_label', 'Part ' + str(source['part']))})")
+                    lines.append(f"- [S{source['n']}] {source['label']} — {source['law_title']} ({source.get('part_label', 'Part ' + str(source.get('part', 1)))})")
                 lines.append("")
     return "\n".join(lines)
 
@@ -307,9 +307,12 @@ def clipboard_html(answer: str, appearance: str = "System") -> str:
 
 def load_graph():
     """Import once through Python's module cache; suitable for st.cache_resource."""
-    from src.graph import graph
+    def import_graph():
+        from src.graph import graph
+        return graph
 
-    return graph
+    # Model initialization and inference use the same dedicated thread.
+    return _WORKER.submit(import_graph).result()
 
 
 def run_question(question: str) -> Generator[dict[str, Any], None, None]:
@@ -319,7 +322,7 @@ def run_question(question: str) -> Generator[dict[str, Any], None, None]:
 
     def run():
         try:
-            graph = load_graph()
+            from src.graph import graph
             run_id = uuid4()
             started = perf_counter()
             state = {"question": question}

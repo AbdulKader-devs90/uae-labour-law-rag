@@ -20,3 +20,6 @@ textColor = "#E8EDF5"
 
 [browser]
 gatherUsageStats = false
+
+[client]
+showErrorDetails = "none"
