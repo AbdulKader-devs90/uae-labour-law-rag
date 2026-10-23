@@ -97,3 +97,18 @@ mark {background:var(--sand);color:var(--gold);padding:1px 2px;border-radius:3px
   .welcome-note span {margin:0 4px;}
 }
 @media(prefers-reduced-motion:reduce) {html {scroll-behavior:auto;} * {transition:none!important;}}
+
+/* Evidence and evaluation additions share the conversation's palette. */
+.confidence.unavailable {background:var(--line);color:var(--muted);}
+.score-inspector {margin:8px 0 16px;}
+.score-track {height:8px;border-radius:8px;background:var(--line);position:relative;margin-top:12px;}
+.score-track>div {height:100%;background:var(--gold);border-radius:8px;}
+.score-track i {position:absolute;left:10%;top:-3px;height:14px;width:2px;background:var(--ink);}
+[class*="st-key-followups_"] {flex-direction:row;flex-wrap:wrap;gap:8px;}
+[class*="st-key-followups_"]>[data-testid="stElementContainer"] {width:auto;flex:0 1 auto;}
+[class*="st-key-followups_"] button {border-radius:24px!important;font-size:12px;padding:6px 12px;min-height:32px;}
+[class*="st-key-followups_"] button p {font-size:12px!important;line-height:1.5!important;}
+.evaluation-intro {padding:32px 0 16px;}
+.evaluation-intro h2 {font-size:32px;font-weight:600;letter-spacing:-1px;color:var(--ink);padding:8px 0;}
+.evaluation-intro p {font-size:14px;color:var(--muted);}
+.evaluation-highlight {background:var(--sand);color:var(--gold);border:1px solid var(--line);border-radius:16px;padding:24px;font-size:16px;line-height:1.8;font-weight:600;margin:8px 0 16px;}

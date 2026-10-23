@@ -4,6 +4,8 @@
 from backend import (
     PIPELINE_LABELS, PIPELINE_NEXT_LABELS, SUGGESTIONS, answer_markdown, clipboard_html,
     highlighted_text, load_graph, run_question, to_view_model,
+    METRIC_DEFINITIONS, VERSION_DEFINITIONS, VERSION_LABELS, conversation_markdown,
+    load_evaluation, submit_feedback, trace_url,
 )
 
 from html import escape
@@ -43,7 +45,8 @@ with st.sidebar:
     st.markdown("### Settings")
     appearance = st.selectbox("Appearance", ["System", "Light", "Dark"])
     st.toggle("Show pipeline details", key="show_pipeline")
-    if st.button("Clear chat", use_container_width=True):
+    st.download_button("Download conversation", data=conversation_markdown(st.session_state.messages), file_name="qanoon-conversation.md", mime="text/markdown", disabled=not st.session_state.messages, width="stretch", on_click="ignore")
+    if st.button("Clear chat", width="stretch"):
         st.session_state.messages = []
         st.session_state.feedback = {}
         st.session_state.pop("pending_question", None)
@@ -64,6 +67,12 @@ if appearance != "System":
     theme_override = f".stApp {{{palette} color-scheme:{appearance.lower()};}}"
 st.html(f"<style>{css}\n{theme_override}</style>")
 
+if "feedback_notice" in st.session_state:
+    if st.session_state.pop("feedback_notice"):
+        st.toast("Thanks — feedback saved", icon="✅")
+    else:
+        st.toast("Feedback could not be saved to LangSmith. Your rating is kept in this session.", icon="⚠️")
+
 st.html('''<div class="brand-bar"><div class="brand-mark">⚖</div><div>
     <div class="eyebrow">QANOON <span>قانون</span></div>
     <h1>UAE Labour Law Assistant</h1>
@@ -73,60 +82,132 @@ st.html('''<div class="brand-bar"><div class="brand-mark">⚖</div><div>
 
 
 def render_sources(view, message_id):
-    cited = [source for source in view["sources"] if source["cited"]]
-    sources = cited or view["sources"]
+    sources = view['display_sources']
+    cited = any(source['cited'] for source in sources)
     st.html(f'<div class="section-label">{"CITED SOURCES" if cited else "RETRIEVED SOURCES · NO CITATIONS IN ANSWER"} <span>{len(sources):02}</span></div>')
     if not sources:
-        st.caption("No source text was returned for this response.")
+        st.caption('No source text was returned for this response.')
     for offset in range(0, len(sources), 2):
-        columns = st.columns(2, gap="small")
+        columns = st.columns(2, gap='small')
         for column, source in zip(columns, sources[offset:offset + 2]):
             with column, st.container(border=True, key=f"source_{message_id}_{source['n']}"):
                 st.html(f'''<div id="source-{message_id}-{source['n']}" class="source-heading">
                     <span class="source-number">S{source['n']}</span><b>{escape(source['label'])}</b></div>
                     <div class="law-title">{escape(source['law_title'])}</div>
                     <div class="source-meta"><span>Relevance {source['score']:.0%}</span>
-                    <span>Part {source['part']} / {source['total_parts']}</span></div>
+                    <span>{escape(source['part_label'])}</span></div>
                     <div class="relevance-track"><div style="width:{source['score'] * 100:.1f}%"></div></div>''')
-                with st.expander("Read article text"):
-                    st.html('<div class="article-text">' + highlighted_text(source["text"], view.get("question", ""), view["rewritten"]) + '</div>')
+                with st.expander('Read article text'):
+                    for chunk in source['parts']:
+                        if len(source['parts']) > 1:
+                            st.caption(f"Part {chunk['part']} · {'cited' if chunk['cited'] else 'also retrieved'}")
+                        st.html('<div class="article-text">' + highlighted_text(chunk['text'], view.get('question', ''), view['rewritten']) + '</div>')
+
+
+def render_inspector(view):
+    with st.expander('Pipeline details'):
+        st.caption('Rewritten query')
+        st.write(view['rewritten'] or 'No rewrite available.')
+        st.html(f'''<div class="score-inspector"><div class="source-meta">
+            <span>Top re-rank score <b>{view['top_score']:.3f}</b></span><span>Cut-off 0.10</span></div>
+            <div class="score-track"><div style="width:{min(1, max(0, view['top_score'])) * 100:.1f}%"></div>
+            <i title="Cut-off 0.10"></i></div></div>''')
+        st.caption(f"Generate attempts: {view.get('attempts', 0)} · Path: {view['path']}")
+        st.markdown('**All retrieved chunks**')
+        if not view['sources']:
+            st.caption('No chunks passed the evidence cut-off.')
+        for source in view['sources']:
+            with st.expander(f"Original S{source['n']} · {source['label']} · part {source['part']} · {source['score']:.3f}"):
+                st.caption(f"Chunk: {source['chunk_id']} · {'Cited' if source['cited'] else 'Not cited'}")
+                st.html('<div class="article-text">' + highlighted_text(source['text'], view['question'], view['rewritten']) + '</div>')
+        for step in view.get('timeline', []):
+            st.caption(f"✓ {step['label']} · {step['seconds']:.1f}s")
 
 
 def render_answer(view, index):
+    selected = None
     message_id = str(index)
-    refused = view["path"].startswith("refused")
+    refused = view['path'].startswith('refused')
     if refused:
-        with st.container(border=True, key=f"refusal_{index}"):
+        with st.container(border=True, key=f'refusal_{index}'):
             st.html('<div class="refusal-title">◇ &nbsp; Not covered by these laws</div>')
-            st.markdown(view["answer"])
-            st.caption("Try asking about leave, wages, gratuity, employment contracts or personal data protection.")
-            st.markdown("[Visit MOHRE ↗](https://www.mohre.gov.ae/)")
+            st.markdown(view['display_answer'])
+            st.caption('Try asking about leave, wages, gratuity, employment contracts or personal data protection.')
     else:
-        st.markdown(answer_markdown(view["answer"], message_id), unsafe_allow_html=True)
-        if view["confidence"] == "Low":
-            st.warning("Weak match with the law text — please verify the cited article.", icon="⚠️")
-    level = view["confidence"].lower() if not refused else "unavailable"
-    st.html(f'<div class="answer-meta"><span class="confidence {level}">{escape(view["confidence"])} confidence</span><span>{view["seconds"]:.1f}s response time</span></div>')
-    with st.expander("Rewritten as", expanded=False):
-        st.caption(view["rewritten"] or "No rewrite available.")
+        st.markdown(answer_markdown(view['display_answer'], message_id), unsafe_allow_html=True)
+        if view['confidence'] == 'Low':
+            st.warning('Weak match with the law text — please verify the cited article.', icon='⚠️')
+    level = view['confidence'].lower() if not refused else 'unavailable'
+    pill = 'No matching source' if refused else view['confidence'] + ' confidence'
+    st.html(f'<div class="answer-meta"><span class="confidence {level}">{escape(pill)}</span><span>{view["seconds"]:.1f}s response time</span></div>')
+    with st.expander('Rewritten as', expanded=False):
+        st.caption(view['rewritten'] or 'No rewrite available.')
     if not refused:
         render_sources(view, message_id)
-    if st.session_state.show_pipeline and view.get("timeline"):
-        with st.expander("Pipeline details"):
-            for step in view["timeline"]:
-                st.caption(f"✓ {step['label']} · {step['seconds']:.1f}s")
-    with st.container(key=f"actions_{index}"):
-        copy_col, up_col, down_col, trace_col = st.columns([2, 1, 1, 2], gap="small")
+    if st.session_state.show_pipeline:
+        render_inspector(view)
+    with st.container(key=f'actions_{index}'):
+        copy_col, up_col, down_col, trace_col = st.columns([2, 1, 1, 2], gap='small')
         with copy_col:
-            st.iframe(clipboard_html(view["answer"], appearance), height=40, alt="Copy answer")
-        for column, value, label in [(up_col, "up", "👍"), (down_col, "down", "👎")]:
+            st.iframe(clipboard_html(view['display_answer'], appearance), height=40, alt='Copy answer')
+        rating = st.session_state.feedback.get(index)
+        for column, score, label in [(up_col, 1, '👍'), (down_col, 0, '👎')]:
             with column:
-                if st.button(label, key=f"feedback_{index}_{value}", help="Helpful" if value == "up" else "Needs improvement", type="primary" if st.session_state.feedback.get(index) == value else "secondary", use_container_width=True):
-                    st.session_state.feedback[index] = value
+                if st.button(label, key=f"feedback_{index}_{'up' if score else 'down'}", help='Helpful' if score else 'Needs improvement', disabled=rating is not None, type='primary' if rating and rating['score'] == score else 'secondary', width="stretch"):
+                    saved = submit_feedback(view.get('run_id', ''), score)
+                    st.session_state.feedback[index] = {'score': score, 'saved': saved}
+                    st.session_state.feedback_notice = saved
                     st.rerun()
         with trace_col:
-            st.link_button("View trace ↗", "https://smith.langchain.com", use_container_width=True)
+            st.link_button('View trace ↗', view.get('trace_url', 'https://smith.langchain.com'), width="stretch")
+    if view.get('follow_ups'):
+        st.html('<div class="section-label">KEEP EXPLORING</div>')
+        with st.container(key=f'followups_{index}'):
+            for n, suggestion in enumerate(view['follow_ups']):
+                if st.button(suggestion, key=f'followup_{index}_{n}', width="content"):
+                    selected = suggestion
+    return selected
 
+
+def render_evaluation():
+    import altair as alt
+
+    st.html('<section class="evaluation-intro"><div class="eyebrow">MEASURED, NOT ASSUMED</div><h2>How it was evaluated</h2><p>Three retrieval pipelines. Five checks on answer quality.</p></section>')
+    try:
+        evaluation = load_evaluation()
+    except (ValueError, OSError):
+        st.warning('The evaluation summary could not be read. Please check data/eval/final_summary.csv.')
+        return
+    if not evaluation['records']:
+        st.info('Evaluation results are not available yet. Add data/eval/final_summary.csv to see the comparison.')
+        return
+    if evaluation['highlight']:
+        st.html('<div class="evaluation-highlight">' + escape(evaluation['highlight']) + '</div>')
+    st.caption(evaluation['note'])
+    for definition in VERSION_DEFINITIONS.values():
+        st.write(definition)
+    st.caption('C final (3 runs) = C with the corrected gold set, averaged over three runs.')
+    dark = appearance == 'Dark'
+    ink = '#a5b3c7' if dark else '#637084'
+    grid = '#304056' if dark else '#e3e5e8'
+    chart = alt.Chart(alt.Data(values=evaluation['records'])).mark_bar(cornerRadiusTopLeft=4, cornerRadiusTopRight=4).encode(
+        x=alt.X('metric:N', title=None, sort=list(METRIC_DEFINITIONS), axis=alt.Axis(labelAngle=-20, labelLimit=160)),
+        xOffset=alt.XOffset('version:N', sort=list(VERSION_LABELS.values())),
+        y=alt.Y('score:Q', title='Score', scale=alt.Scale(domain=[0, 1]), axis=alt.Axis(format='.0%')),
+        color=alt.Color('version:N', title=None, scale=alt.Scale(domain=list(VERSION_LABELS.values()), range=['#a5afbf', '#56789f', '#5e927b', '#b39352']), legend=alt.Legend(orient='top')),
+        tooltip=[alt.Tooltip('version:N', title='Version'), alt.Tooltip('metric:N', title='Metric'), alt.Tooltip('score:Q', title='Score', format='.1%')],
+    ).properties(height=320).configure(background='transparent').configure_view(strokeWidth=0).configure_axis(labelColor=ink, titleColor=ink, gridColor=grid, domain=False, ticks=False, labelFont='Inter', titleFont='Inter').configure_legend(labelColor=ink, labelFont='Inter')
+    st.altair_chart(chart, width="stretch", theme=None)
+    with st.container(border=True):
+        for metric, definition in METRIC_DEFINITIONS.items():
+            st.markdown(f'**{metric}** — {definition}')
+    st.caption('Retrieval and citation metrics apply to questions with expected articles; blank evaluations are excluded from their means. Results describe this evaluation set, not a guarantee for every question.')
+
+
+page = st.segmented_control("Explore", ["Ask Qanoon", "How it was evaluated"], default="Ask Qanoon", key="page", label_visibility="collapsed")
+if page == "How it was evaluated":
+    render_evaluation()
+    st.stop()
 
 selected = None
 if not st.session_state.messages:
@@ -138,14 +219,14 @@ if not st.session_state.messages:
         for column, (topic, question) in zip(st.columns(3, gap="small"), SUGGESTIONS[row * 3:row * 3 + 3]):
             with column, st.container(border=True, key=f"suggestion_{row}_{topic.replace(' ', '_')}"):
                 st.html(f'<div class="topic-label">{escape(topic)}</div>')
-                if st.button(question + "  ↗", key=f"suggest_{topic}", use_container_width=True):
+                if st.button(question + "  ↗", key=f"suggest_{topic}", width="stretch"):
                     selected = question
     st.html('<div class="welcome-note">ARTICLE-LEVEL SOURCES <span>·</span> FOUR UAE LAWS <span>·</span> PLAIN LANGUAGE</div>')
 
 for index, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"], avatar="⚖️" if message["role"] == "assistant" else "👤"):
         if message["role"] == "assistant":
-            render_answer(message["view"], index)
+            selected = render_answer(message["view"], index) or selected
         else:
             st.write(message["content"])
 
@@ -170,6 +251,7 @@ if pending := st.session_state.pop("pending_question", None):
                     if event.get("done"):
                         view = to_view_model(event["state"])
                         view.update(run_id=event["run_id"], timeline=timeline)
+                        view["trace_url"] = trace_url(event["run_id"])
                     else:
                         label = PIPELINE_LABELS.get(event["node"], event["node"].capitalize())
                         timeline.append({"label": label, "seconds": elapsed})

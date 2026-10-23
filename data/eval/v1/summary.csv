@@ -1,0 +1,4 @@
+,decision_correct,retrieval_hit,citation_hit,correctness,faithfulness,avg_seconds
+A_naive,0.93,0.77,0.77,0.8,0.8,1.15
+B_hybrid,0.93,0.85,0.85,0.8,0.93,1.17
+C_full,1.0,0.92,0.92,1.0,0.93,1.97

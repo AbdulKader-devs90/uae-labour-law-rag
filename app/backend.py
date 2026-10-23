@@ -48,6 +48,203 @@ PIPELINE_NEXT_LABELS = {
 }
 
 
+# Keyword routes are ordered: immigration wins when a question mentions both.
+AUTHORITY_ROUTES = {
+    "immigration": {
+        "keywords": ["visa", "golden visa", "residency", "residence permit", "emirates id", "entry permit", "family sponsorship"],
+        "authorities": [
+            {"name": "ICP (Federal Authority for Identity, Citizenship, Customs & Port Security)", "url": "https://icp.gov.ae", "note": ""},
+            {"name": "GDRFA Dubai", "url": "https://gdrfad.gov.ae", "note": "For Dubai residents"},
+        ],
+    },
+    "employment": {
+        "keywords": ["work permit", "labour card", "employment contract", "establishment card", "wages", "wps", "labour complaint", "mohre"],
+        "authorities": [{"name": "MOHRE (Ministry of Human Resources & Emiratisation)", "url": "https://www.mohre.gov.ae", "note": ""}],
+    },
+    "default": {
+        "keywords": [],
+        "authorities": [{"name": "UAE Government portal", "url": "https://u.ae", "note": ""}],
+    },
+}
+
+RELATED_ARTICLES = {
+    ("labour_law", 29): ["Can I carry forward unused annual leave?", "How is unused leave paid when I leave my job?"],
+    ("labour_law", 51): ["Can my employer deduct from my gratuity?", "How is end-of-service gratuity calculated?"],
+    ("labour_law", 30): ["Can I be dismissed during maternity leave?", "How long is maternity leave?"],
+    ("labour_law", 43): ["What happens if notice is not given?", "How much notice must be given to end a contract?"],
+    ("labour_law", 13): ["What are my employer’s obligations?", "What does the law say about paying wages on time?"],
+    ("pdpl", 22): ["What are my rights over my personal data?", "When can personal data be transferred abroad?"],
+    ("pdpl", 23): ["What are my rights over my personal data?", "When is consent needed to process personal data?"],
+}
+
+METRIC_DEFINITIONS = {
+    "decision_correct": "Answered when it should, refused when it should.",
+    "retrieval_hit": "Expected article retrieved.",
+    "citation_hit": "Expected article cited.",
+    "correctness": "LLM judge vs reference.",
+    "faithfulness": "Every claim supported by the sources.",
+}
+VERSION_DEFINITIONS = {
+    "A_naive": "A = fixed chunks + dense search",
+    "B_hybrid": "B = article chunks + hybrid search + re-rank + cut-off",
+    "C_full": "C = B + query rewrite + LangGraph",
+}
+VERSION_LABELS = {name: name for name in VERSION_DEFINITIONS}
+VERSION_LABELS["C_full_final_x3"] = "C final (3 runs)"
+
+
+def refusal_guidance(question: str) -> dict:
+    for route in AUTHORITY_ROUTES.values():
+        if any(re.search(r"\b" + re.escape(word) + r"\b", question, re.I) for word in route["keywords"]):
+            authorities = route["authorities"]
+            break
+    else:
+        authorities = AUTHORITY_ROUTES["default"]["authorities"]
+    text = ("Not covered by the laws I search (Labour Law, its Executive Regulation, the 2022 amendment, PDPL). "
+            "For this topic, the responsible authority is:")
+    links = "\n".join(f"- {a['note'] + ': ' if a['note'] else ''}[{a['name']}]({a['url']})" for a in authorities)
+    return {"text": text, "authorities": authorities, "markdown": text + "\n\n" + links}
+
+
+def follow_up_questions(sources: list, question: str) -> list[str]:
+    questions = []
+    for source in sources:
+        if source["cited"]:
+            for suggestion in RELATED_ARTICLES.get((source["source"], source["article"]), []):
+                if suggestion.casefold().rstrip("?. ") != question.casefold().rstrip("?. ") and suggestion not in questions:
+                    questions.append(suggestion)
+    for fallback in ["How many days of annual leave do I get?", "How much notice must be given to end a contract?", "What are my rights over my personal data?"]:
+        if len(questions) >= 3:
+            break
+        if fallback not in questions and fallback.casefold().rstrip("?. ") != question.casefold().rstrip("?. "):
+            questions.append(fallback)
+    return questions[:3]
+
+
+def source_cards(sources: list, answer: str) -> tuple[list, str]:
+    """Merge retrieved parts of cited articles and renumber display tags only."""
+    cited = [source for source in sources if source["cited"]]
+    keys = list(dict.fromkeys((s["source"], s["article"]) for s in (cited or sources)))
+    cards, mapping = [], {}
+    for n, key in enumerate(keys, 1):
+        chunks = [s for s in sources if (s["source"], s["article"]) == key]
+        chunks.sort(key=lambda s: (s["part"] or 1, s["n"]))
+        # Deduplicate identical chunks while retaining all raw indices in the map.
+        parts = list(dict.fromkeys(s["part"] or 1 for s in chunks))
+        part_text = str(parts[0]) if len(parts) == 1 else (
+            f"{parts[0]}–{parts[-1]}" if parts == list(range(parts[0], parts[-1] + 1)) else ", ".join(map(str, parts)))
+        suffix = f" · parts {part_text}" if len(parts) > 1 else ""
+        unique_chunks = list({(s["part"], s["text"]): s for s in chunks}.values())
+        cards.append({
+            **chunks[0], "n": n, "label": chunks[0]["label"] + suffix,
+            "score": max(s["score"] for s in chunks), "parts": unique_chunks,
+            "part_label": f"Parts {part_text} / {chunks[0]['total_parts']}" if len(parts) > 1 else f"Part {part_text} / {chunks[0]['total_parts']}",
+            "cited": any(s["cited"] for s in chunks),
+        })
+        mapping.update({s["n"]: n for s in chunks})
+    displayed = re.sub(r"\[S(\d+)\]", lambda m: f"[S{mapping[int(m[1])]}]" if int(m[1]) in mapping else "[source unavailable]", answer)
+    displayed = re.sub(r"(\[S\d+\])(?:\s*\1)+", r"\1", displayed)
+    return cards, displayed
+
+
+def submit_feedback(run_id: str, score: int) -> bool:
+    """Send exactly one rating; callers handle session deduplication and toasts."""
+    try:
+        from langsmith import Client
+        from uuid import UUID
+
+        UUID(run_id)
+        if score not in (0, 1):
+            return False
+        Client().create_feedback(run_id=run_id, key="user_rating", score=score)
+        return True
+    except Exception:
+        return False
+
+
+@lru_cache(maxsize=8)
+def _project_url(project_name: str) -> str:
+    from langsmith import Client
+
+    return Client().read_project(project_name=project_name).url or "https://smith.langchain.com"
+
+
+@lru_cache(maxsize=128)
+def trace_url(run_id: str) -> str:
+    """Build the SDK's private run URL even while a trace is still uploading."""
+    try:
+        from langsmith import Client
+        from langsmith.utils import get_tracer_project
+        from uuid import UUID
+
+        UUID(run_id)
+        project = _project_url(get_tracer_project())
+        if project != "https://smith.langchain.com":
+            return f"{project}/r/{run_id}?poll=true"
+        run = Client().read_run(run_id)
+        return run.url or "https://smith.langchain.com"
+    except Exception:
+        return "https://smith.langchain.com"
+
+
+def conversation_markdown(messages: list) -> str:
+    lines = ["# Qanoon — UAE Labour Law Assistant", "", "Explains the law; not legal advice.", ""]
+    for message in messages:
+        if message["role"] == "user":
+            lines.extend(["## Question", "", message["content"], ""])
+        else:
+            view = message["view"]
+            lines.extend(["## Answer", "", view.get("display_answer", view["answer"]), ""])
+            cards = view.get("display_sources", view["sources"])
+            if cards and not view["path"].startswith("refused"):
+                lines.extend(["### Citations" if any(s["cited"] for s in cards) else "### Retrieved sources (not cited)", ""])
+                for source in cards:
+                    lines.append(f"- [S{source['n']}] {source['label']} — {source['law_title']} ({source.get('part_label', 'Part ' + str(source['part']))})")
+                lines.append("")
+    return "\n".join(lines)
+
+
+def load_evaluation(data_dir: Path | None = None) -> dict:
+    """Read the approved aggregate only. v2 is a rejected experiment."""
+    import csv
+    import math
+
+    base = data_dir or Path(__file__).resolve().parents[1] / 'data/eval'
+    path = base / 'final_summary.csv'
+    versions = {}
+    if path.exists():
+        with path.open(newline='', encoding='utf-8-sig') as handle:
+            for row in csv.DictReader(handle):
+                name = row.get('version')
+                if name not in VERSION_LABELS:
+                    continue
+                values = {metric: float(row[metric]) for metric in METRIC_DEFINITIONS if row.get(metric)}
+                if not all(math.isfinite(value) and 0 <= value <= 1 for value in values.values()):
+                    raise ValueError('Evaluation scores must be between zero and one.')
+                values['avg_seconds'] = float(row.get('avg_seconds') or 0)
+                values['runs'] = int(row.get('runs') or 1)
+                versions[name] = values
+    records = [
+        {'version': VERSION_LABELS[name], 'version_id': name, 'metric': metric, 'score': values[metric]}
+        for name in VERSION_LABELS
+        for values in [versions.get(name, {})]
+        for metric in METRIC_DEFINITIONS if metric in values
+    ]
+    final = versions.get('C_full_final_x3')
+    highlight = None
+    if final and all(metric in final for metric in ['decision_correct', 'retrieval_hit', 'correctness', 'faithfulness']):
+        decisions, retrieval, correctness = (final[key] for key in ['decision_correct', 'retrieval_hit', 'correctness'])
+        if decisions == retrieval == correctness:
+            quality = f'{decisions:.0%} correct decisions, retrieval and correctness'
+        else:
+            quality = f'{decisions:.0%} correct decisions · {retrieval:.0%} retrieval · {correctness:.0%} correctness'
+        highlight = f"Final version, {final['runs']} runs: {quality} · {final['faithfulness']:.0%} faithfulness · ~{final['avg_seconds']:.0f} s per answer"
+    return {
+        'records': records, 'versions': versions, 'highlight': highlight,
+        'note': 'Source: data/eval/final_summary.csv. A, B and C each have one run; C final is the average of three runs. Rejected v2 results are excluded.',
+    }
+
+
 @lru_cache(maxsize=1)
 def article_parts():
     """Read actual part counts from the corpus, rather than retrieved subsets."""
@@ -173,6 +370,8 @@ def to_view_model(state: dict) -> dict:
             text = rest if separator else ""
         sources.append({
             "n": n,
+            "source": metadata.get("source", title),
+            "chunk_id": metadata.get("chunk_id", f"result-{n}"),
             "label": f"{short_title} · {article_label}",
             "law_title": title,
             "article": article,
@@ -183,8 +382,16 @@ def to_view_model(state: dict) -> dict:
             "cited": f"[S{n}]" in answer,
         })
     confidence = "High" if top_score >= 0.8 else "Medium" if top_score >= 0.3 else "Low"
+    cards, display_answer = source_cards(sources, answer)
+    guidance = refusal_guidance(str(state.get("question", ""))) if path.startswith("refused") else None
     return {
         "answer": answer,
+        "display_answer": guidance["markdown"] if guidance else display_answer,
+        "display_sources": cards,
+        "refusal": guidance,
+        "follow_ups": [] if guidance else follow_up_questions(sources, str(state.get("question", ""))),
+        "attempts": int(state.get("attempts", 0)),
+        "cutoff": 0.10,
         "question": str(state.get("question", "")),
         "path": path,
         "top_score": top_score,
