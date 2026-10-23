@@ -82,6 +82,8 @@ Launch `jupyter lab`, select the `.venv` Python kernel and run all cells in note
 2. `03_chunking.ipynb` creates article and fixed chunks.
 3. `04_retrieval.ipynb` builds the Chroma index and checks dense, keyword and hybrid retrieval.
 
+The cleaned text and chunks are included in the repo, so you can skip notebooks 02–03 and only run notebook 04 to build the local Chroma index.
+
 The first model load downloads embeddings and the FlashRank model. Later starts reuse local model files. Local indexes, downloaded re-ranker models and credentials are ignored by Git.
 
 ## Run the app
@@ -127,6 +129,13 @@ docs/
 .streamlit/           Streamlit theme configuration
 tests/                Offline UI regressions and opt-in live smoke checks
 ```
+
+## Known limitations
+
+- Near-scope questions (e.g. "How can I get a golden visa?") can pass the evidence gate on a weak match and the model may add uncited outside knowledge; the UI shows a low-confidence warning. Planned fix: a sentence-level citation check that removes or regenerates uncited sentences.
+- Leading questions (e.g. "What is my ideal notice period?") can make the model accept the question's assumption.
+- The evaluation set is small (15 questions), so scores are directional.
+- English text only; the corpus is a snapshot and not updated automatically.
 
 ## Learnings
 
