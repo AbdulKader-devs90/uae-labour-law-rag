@@ -2,6 +2,8 @@
 
 A RAG assistant that answers UAE labour-law and personal-data questions from the official text of four UAE laws, with article-level citations.
 
+**Project report:** [docs/PROJECT_REPORT.md](docs/PROJECT_REPORT.md) ([PDF](docs/PROJECT_REPORT.pdf)) · **Demo video:** [Loom](https://www.loom.com/share/e35ced4d508c4193853a76a896e4425c)
+
 ## Screenshots
 
 ![Annual leave answer with article-level sources](docs/screenshots/02_answer_annual_leave.jpg)
@@ -53,6 +55,17 @@ Source: [data/eval/final_summary.csv](data/eval/final_summary.csv), evaluated on
 | C_full_final_x3 | 3 | 1.00 | 1.00 | 1.00 | 1.00 | 0.93 | 1.90 |
 
 A used fixed chunks and dense search. B added article chunks, hybrid search, re-ranking and a confidence cut-off. C added query rewriting and LangGraph orchestration. C final uses the corrected gold set and averages three runs. Retrieval and citation metrics apply to questions with expected articles; missing evaluations are excluded from their means. These results describe this small evaluation set.
+
+### v3: guards found in live testing (18 questions × 3 runs)
+
+Live testing found a near-scope question (golden visa) answered with outside knowledge and an invented condition ("unless agreed in writing"). v3 (`ask(question, strict=True)`, the default) adds a stricter prompt under weak evidence, rules against untagged facts and adopted assumptions, and a sentence-level citation check. Three questions were added to the test set.
+
+| Version | Runs | Decision correct | Retrieval hit | Citation hit | Correctness | Faithfulness | Avg seconds |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| C v1 (no guards) | 3 | 0.94 | 0.93 | 0.93 | 0.93 | 0.83 | 2.12 |
+| C v3 (final) | 3 | 0.93 | 0.93 | 0.93 | 0.89 | 0.91 | 2.12 |
+
+Source: [data/eval/d18_x3_C_full.csv](data/eval/d18_x3_C_full.csv) and [data/eval/d18_x3_C_v3.csv](data/eval/d18_x3_C_v3.csv). Analysis in the [project report](docs/PROJECT_REPORT.md).
 
 ## Setup
 
@@ -125,6 +138,7 @@ data/
   eval/               Evaluation summaries and versioned results
   notes/              Step-by-step learning notes
 docs/
+  PROJECT_REPORT.md   Project report (also as PDF)
   screenshots/        App screenshots
 .streamlit/           Streamlit theme configuration
 tests/                Offline UI regressions and opt-in live smoke checks
@@ -132,9 +146,9 @@ tests/                Offline UI regressions and opt-in live smoke checks
 
 ## Known limitations
 
-- Near-scope questions (e.g. "How can I get a golden visa?") can pass the evidence gate on a weak match and the model may add uncited outside knowledge; the UI shows a low-confidence warning. Planned fix: a sentence-level citation check that removes or regenerates uncited sentences.
-- Leading questions (e.g. "What is my ideal notice period?") can make the model accept the question's assumption.
-- The evaluation set is small (15 questions), so scores are directional.
+- Near-scope questions that share words with an article (e.g. "How can I get a golden visa?") can still get a narrow, circular answer from a related article instead of a refusal. v3 stops outside knowledge leaking in, but does not refuse these yet.
+- Leading words ("ideal", "best") can derail retrieval: "What is my ideal notice period?" never retrieves Article 43. Planned fix: strip opinion words in the rewrite step and add an LLM relevance check before generating.
+- The evaluation set is small (18 questions), so scores are directional.
 - English text only; the corpus is a snapshot and not updated automatically.
 
 ## Learnings
