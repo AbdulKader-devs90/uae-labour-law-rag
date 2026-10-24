@@ -1,0 +1,3 @@
+,decision_correct,retrieval_hit,citation_hit,correctness,faithfulness,avg_seconds
+C_full,0.94,0.93,0.93,0.93,0.83,2.12
+C_v3,0.93,0.93,0.93,0.89,0.91,2.12

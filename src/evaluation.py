@@ -25,7 +25,8 @@ from src.graph import CUTOFF, REFUSAL, TOP_N, answer_chain, ask, cite, format_co
 from src.llm import get_llm
 from src.retrieval import dense_search, hybrid_search, label, rerank
 
-DATASET_NAME = "uae-labour-rag-eval-15"
+DATASET_NAME = "uae-labour-rag-eval-15"        # v1 evaluation (kept unchanged so old experiments stay comparable)
+DATASET_NAME_18 = "uae-labour-rag-eval-18"     # v3: the 15 above + 3 near-scope / leading questions from live testing
 
 # ── 1. The 15 test questions ───────────────────────────────────────────────
 # expected: article labels that count as "found" ("source:article"). Empty = out of scope.
@@ -80,17 +81,31 @@ DATASET = [
      "ref": "REFUSE: not covered by these laws (US tax rule)."},
 ]
 
+# Added after live UI testing (near-scope and leading questions the first 15 did not cover)
+DATASET_EXTRA = [
+    {"q": "How can I get a golden visa?", "cat": "edge-near-scope",
+     "expected": [],
+     "ref": "REFUSE: obtaining a Golden Visa is not covered by these laws (it is handled by ICP / GDRFA). The Executive Regulation only mentions a work permit for holders of golden residency, which does not answer the question."},
+    {"q": "How do I get an investor licence in the UAE?", "cat": "edge-near-scope",
+     "expected": [],
+     "ref": "REFUSE: investor or business licences are not covered by these laws."},
+    {"q": "What is my ideal notice period if I am working in the private sector?", "cat": "edge-leading",
+     "expected": ["labour_law:43"],
+     "ref": "The law sets no 'ideal' notice period: the notice (warning) period is agreed in the contract and must be at least 30 days and at most 90 days, the same for both parties unless more beneficial to the worker. A good answer does not claim an ideal value."},
+]
+DATASET_18 = DATASET + DATASET_EXTRA
 
-def upload_dataset(client: Client | None = None, force: bool = False):
+
+def upload_dataset(client: Client | None = None, force: bool = False, name: str = DATASET_NAME, rows: list | None = None):
     """Create the dataset in LangSmith if it does not exist.
     WARNING: force=True deletes the dataset AND all its experiments, then recreates it."""
     client = client or Client()
-    if client.has_dataset(dataset_name=DATASET_NAME):
+    if client.has_dataset(dataset_name=name):
         if not force:
-            return client.read_dataset(dataset_name=DATASET_NAME)
-        client.delete_dataset(dataset_name=DATASET_NAME)
-    ds = client.create_dataset(DATASET_NAME, description="15 UAE labour-law questions incl. 5 edge cases")
-    for row in DATASET:
+            return client.read_dataset(dataset_name=name)
+        client.delete_dataset(dataset_name=name)
+    ds = client.create_dataset(name, description=f"{len(rows or DATASET)} UAE labour-law questions incl. edge cases")
+    for row in (rows or DATASET):
         client.create_example(
             dataset_id=ds.id,
             inputs={"question": row["q"]},
@@ -99,13 +114,18 @@ def upload_dataset(client: Client | None = None, force: bool = False):
     return ds
 
 
+def upload_dataset_18(client: Client | None = None):
+    """Create the 18-question dataset (v3 evaluation) if it does not exist yet."""
+    return upload_dataset(client, name=DATASET_NAME_18, rows=DATASET_18)
+
+
 # ── 2. The 3 pipeline versions (targets) ──────────────────────────────────
 def _generate(question, results):
     """Shared generation step for versions A and B (same prompt as the graph)."""
     if not results:
         return {"answer": REFUSAL, "sources": [], "path": "refused_low_score"}
     draft = answer_chain.invoke({"context": format_context(results), "question": question,
-                                 "retry_note": ""}).strip()
+                                 "extra_rules": "", "retry_note": ""}).strip()
     if draft.startswith("NOT_FOUND"):
         return {"answer": REFUSAL, "sources": [], "path": "refused_by_llm"}
     used = sorted({int(n) for n in re.findall(r"\[S(\d+)\]", draft)})
@@ -136,16 +156,26 @@ def target_B_hybrid(inputs: dict) -> dict:
     return _pack(_generate(q, results), results)
 
 
-def target_C_full(inputs: dict) -> dict:
-    r = ask(inputs["question"])
+def _target_graph(inputs: dict, strict: bool) -> dict:
+    r = ask(inputs["question"], strict=strict)
     results = r.get("results", [])
     cited_labels = [label(d) for d, _ in results if cite(d) in r.get("sources", [])]
     out = {"answer": r["answer"], "sources": r.get("sources", []), "cited": cited_labels,
-           "path": r["path"], "rewritten": r.get("rewritten")}
+           "path": r["path"], "rewritten": r.get("rewritten"), "removed": r.get("removed", [])}
     return _pack(out, results)
 
 
-TARGETS = {"A_naive": target_A_naive, "B_hybrid": target_B_hybrid, "C_full": target_C_full}
+def target_C_full(inputs: dict) -> dict:
+    """The evaluated v1 graph (no v3 guards)."""
+    return _target_graph(inputs, strict=False)
+
+
+def target_C_v3(inputs: dict) -> dict:
+    """v3: weak-evidence prompt + sentence-level citation check + leading-question rule."""
+    return _target_graph(inputs, strict=True)
+
+
+TARGETS = {"A_naive": target_A_naive, "B_hybrid": target_B_hybrid, "C_full": target_C_full, "C_v3": target_C_v3}
 
 
 # ── 3. Code evaluators (free, exact) ──────────────────────────────────────
